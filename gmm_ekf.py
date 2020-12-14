@@ -17,6 +17,7 @@ from scipy.spatial import distance_matrix
 from filterpy.stats import plot_covariance_ellipse
 
 MAX_MEAS_RANGE = 5.0
+NORM_MEAS_PROB = 0.90
 
 class Gmm_EKF(object):
     def __init__(self, dt, T, \
@@ -97,7 +98,7 @@ class Gmm_EKF(object):
             # return the Nr*Nw*Ngk gaussians to Ngk by prunning states
             #self.condensation()
             self.condensation_KL_div()
-            # self.condensation_max()
+            #self.condensation_max()
             
             # save the data for plotting later
             self.true_hidden_x.append(self.model.x)
@@ -393,11 +394,19 @@ class Gmm_EKF(object):
                 y = self.true_hidden_x[k][1]
                 plt.scatter(x, y, \
                         marker='.', s=40,facecolor='r')
+                
+                best_i = gmm.estimated_alfas[k].shape[0]
+                if(best_i < self.num_priors):
+                    x = self.estimated_x[k][0,best_i-1]
+                    y = self.estimated_x[k][1,best_i-1]                           
+                    P = self.estimated_P[k][0:2,0:2,best_i-1]
+                else:
+                    x = self.estimated_x[k][0,i]
+                    y = self.estimated_x[k][1,i]   
+                    P = self.estimated_P[k][0:2,0:2,i]
                     
-                x = self.estimated_x[k][0,i]
-                y = self.estimated_x[k][1,i]       
                 plot_covariance_ellipse((x, y), \
-                                 self.estimated_P[k][0:2,0:2,i], std=3,
+                                 P, std=3,
                                  facecolor='g', alpha=0.1)
                 plt.scatter(x, self.recorded_meas[k], marker='x', s=40,facecolor='r')
                     
@@ -415,7 +424,8 @@ class Robot(object):
         self.dim_x = x.shape[0]
         self.x = x.copy() #initial estimate
         # helper class to get the noise right
-        self.lidar = Lidar(norm_sig=0.3, uni_delta=0.05, meas_max=MAX_MEAS_RANGE)
+        self.lidar = Lidar(a1=NORM_MEAS_PROB, a4=1.0-NORM_MEAS_PROB, norm_sig=0.3, uni_delta=0.05, \
+                           meas_max=MAX_MEAS_RANGE)
         self.wall  = Wall()
         
         # true "unknown" parameters of the plant
@@ -679,10 +689,10 @@ if __name__ == '__main__':
     
     # prior stuff for the initial guess only
     #x_initial = np.array([[0.], [0.], [0.]]) #one Gaussian for the prior
-    #x_initial = np.array([[0., 0.0], [0., -3.], [0., 0.]]) #one Gaussian for the prior
-    x_initial = np.array([[0., 0.0, 0., 0.0,0., 0.0, 0., 0.0], \
-                          [0., -3., 0., -3., 0., -3., 0., -3.], \
-                          [0., 0., 0., 0., 0., 0., 0., 0.]]) #one Gaussian for the prior
+    x_initial = np.array([[0., 0.0], [0., -3.], [0., 0.]]) #one Gaussian for the prior
+    # x_initial = np.array([[0., 0.0, 0., 0.0,0., 0.0, 0., 0.0], \
+    #                       [0., -3., 0., -3., 0., -3., 0., -3.], \
+    #                       [0., 0., 0., 0., 0., 0., 0., 0.]]) #one Gaussian for the prior
     n_states, n_initial = x_initial.shape[0], x_initial.shape[1]
     P_initial = np.empty([n_states,n_states,n_initial])
     for i in range(n_initial):
@@ -708,7 +718,8 @@ if __name__ == '__main__':
     #R_meas[:,:,0] = 0.50**2 * np.eye(n_meas)
     R_meas[:,:,1] = 0.05 * np.eye(n_meas)
     #R_meas[:,:,1] = 0.05**2 * np.eye(n_meas)
-    alfa_meas = np.array([0.9, 0.1])  # p(range max) = 0.1
+    major_error = 0.9
+    alfa_meas = np.array([major_error, 1.0-major_error])  # p(range max) = 0.1
     
     true_x0 = np.array([[0.0], [0.0], [0.0]])
     
