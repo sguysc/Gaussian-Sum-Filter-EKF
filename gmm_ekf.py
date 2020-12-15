@@ -18,6 +18,7 @@ from filterpy.stats import plot_covariance_ellipse
 
 MAX_MEAS_RANGE = 5.0
 NORM_MEAS_PROB = 0.90
+num_priors = 2 # prune after each update step to this many Gaussians
 
 class Gmm_EKF(object):
     def __init__(self, dt, T, \
@@ -60,10 +61,20 @@ class Gmm_EKF(object):
         
         self.debug = True #False
         
+        self.telem = open('telemetry.csv', 'wt')
+        
+    def __exit__(self, exc_type, exc_value, traceback):
+        print('closing the telemetry file')
+        self.telem.close()
+        
+    def __enter__(self):
+        return self
+    
     def run(self, measured_ranges=None, control_inputs=None):
         # run the actual filtering + simulation (or use recording)
         # k = step number
         for k in range(self.N):
+            self.time = k*self.dt
             if(self.debug):
                 print('running step #%d (t=%.2f):' %(k, k*self.dt))
             # re-set the vector sizes for the new iteration
@@ -96,8 +107,8 @@ class Gmm_EKF(object):
             self.update(measured_range)
             
             # return the Nr*Nw*Ngk gaussians to Ngk by prunning states
-            #self.condensation()
-            self.condensation_KL_div()
+            self.condensation()
+            #self.condensation_KL_div()
             #self.condensation_max()
             
             # save the data for plotting later
@@ -121,6 +132,9 @@ class Gmm_EKF(object):
             if(self.model.safety_violation()):
                 print('reached the wall, exitting ...')
                 break
+            
+            # output to file
+            self.write_telemetry()
             
     def predict(self):
         # predict step, to get p(x(k+1)|z(1:k))
@@ -415,6 +429,17 @@ class Gmm_EKF(object):
         plt.plot([0, x], [-self.model.wall.get_y(0.), -self.model.wall.get_y(x)], label='south wall', color='k', linewidth=4)
         plt.title('Robot in a corridor with Gaussian sum range noise')
 
+    def write_telemetry(self):
+        s = '%.3f, ' %self.time
+        s += '%.3f, %.3f, ' %(self.model.x[0], self.model.x[1])
+        for i in range(self.x.shape[1]):
+            s += '%.3f, %.3f, ' %(self.x[0, i], self.x[1, i])
+            s += '%.3f, %.3f, %.3f, %.3f, ' %(self.P[0, 0, i], self.P[0, 1, i], self.P[1, 0, i], self.P[1, 1, i])
+            s += '%.3f, ' %(self.alfa_prior[i])
+        s += '%.3f\n' %(self.recorded_meas[-1])
+        
+        self.telem.write(s)
+
 # implements the dynamical equations and the gradients
 class Robot(object):
     """ Simulates a robot model travelling in a corridor 
@@ -564,6 +589,10 @@ class Wall(object):
 
     def _y_straight_line(self, x):
         wall_loc = 3.0
+        # if(1.5<x<2.):
+        #     wall_loc = 6.0
+        # else:
+        #     wall_loc = 3.0
         return wall_loc
         
     def get_y(self, xq):
@@ -684,23 +713,23 @@ if __name__ == '__main__':
     tic = timer()
     
     # set-up
-    dt = 0.1 #[sec]
+    dt = 0.01 #[sec]
     T  = 5.
     
     # prior stuff for the initial guess only
     #x_initial = np.array([[0.], [0.], [0.]]) #one Gaussian for the prior
-    x_initial = np.array([[0., 0.0], [0., -3.], [0., 0.]]) #one Gaussian for the prior
-    # x_initial = np.array([[0., 0.0, 0., 0.0,0., 0.0, 0., 0.0], \
-    #                       [0., -3., 0., -3., 0., -3., 0., -3.], \
-    #                       [0., 0., 0., 0., 0., 0., 0., 0.]]) #one Gaussian for the prior
+    if(num_priors == 2):
+        x_initial = np.array([[0., 0.0], [0., -3.], [0., 0.]]) #one Gaussian for the prior
+    else:
+        x_initial = np.array([[0., 0.0, 0., 0.0,0., 0.0, 0., 0.0], \
+                           [0., -3., 0., -3., 0., -3., 0., -3.], \
+                           [0., 0., 0., 0., 0., 0., 0., 0.]]) #one Gaussian for the prior
     n_states, n_initial = x_initial.shape[0], x_initial.shape[1]
     P_initial = np.empty([n_states,n_states,n_initial])
     for i in range(n_initial):
         P_initial[:,:,i] = 0.31**2 * np.eye(n_states)
     alfa_initial = np.ones(n_initial)/n_initial # np.array([0.7, 0.3]) #
-    
-    num_priors = 8 # prune after each update step to this many Gaussians
-    
+        
     # stuff for the process noise. in this case [wx; wy; wydot]
     w_proc = np.array([[0.], [0.], [0.]]) #one Gaussian for the distribution
     n_proc = x_initial.shape[1]
@@ -723,17 +752,19 @@ if __name__ == '__main__':
     
     true_x0 = np.array([[0.0], [0.0], [0.0]])
     
-    gmm = Gmm_EKF(dt, T, \
+    with Gmm_EKF(dt, T, \
                  x_initial, P_initial, alfa_initial, \
                  w_proc, Q_proc, alfa_proc, \
                  v_meas, R_meas, alfa_meas, \
                  Robot(true_x0, dt),
-                 num_priors)
+                 num_priors) as gmm:
+        gmm.run()
+        toc = timer()
+        print('Filtering took %.3f[sec]' %(toc-tic))
+        gmm.plot()
     
-    gmm.run()
-    toc = timer()
-    print('Filtering took %.3f[sec]' %(toc-tic))
     
-    gmm.plot()
+    
+    
 
     
